@@ -13,7 +13,8 @@ class MutatorEngine:
         self.groq = groq_client
 
     async def mutate(self, parent, strategy, recent_successes,
-                     recent_failures, target_info, benign_probe_results=None) -> dict:
+                     recent_failures, target_info, benign_probe_results=None,
+                     recent_insights=None) -> dict:
         prompt = build_mutation_prompt(
             parent_attack=parent,
             strategy=strategy.value,
@@ -21,6 +22,7 @@ class MutatorEngine:
             recent_failures=recent_failures,
             target_info=target_info,
             benign_probe_results=benign_probe_results,
+            recent_insights=recent_insights,
         )
         raw = await self.groq.chat(
             messages=[
@@ -82,4 +84,9 @@ class MutatorEngine:
             candidates = attack_log.get_successful(limit=10)
             if candidates:
                 return random.choice(candidates)
+        # Prefer breakthrough seeds over base seeds
+        breakthroughs = [s for s in seed_library if s.get("success_score", 0) > 0]
+        if breakthroughs and random.random() < 0.6:
+            return random.choice(breakthroughs)
         return random.choice(seed_library)
+

@@ -1,7 +1,6 @@
 """BANE Core Engine"""
 
 import asyncio
-from unittest import result
 import yaml
 from pathlib import Path
 from .groq_client import GroqClient
@@ -12,6 +11,7 @@ from .runner.targets import (
     make_v2_target, run_benign_probes,
 )
 from .runner.judge import AttackJudge
+from .runner.analyzer import AttackAnalyzer
 from .memory.attack_log import AttackLog
 
 
@@ -24,13 +24,24 @@ class BaneCore:
         difficulty = config.get("target_difficulty", "easy")
 
         # Groq client shared by mutator + judge
-        groq = GroqClient(
+        # Groq client for attacker/mutator (creative model)
+        groq_attacker = GroqClient(
             api_key=config.get("groq_api_key", ""),
             url=config.get("groq_url", "https://api.groq.com/openai/v1/chat/completions"),
             model=config.get("groq_model", "llama-3.3-70b-versatile"),
         )
 
-        self.mutator = MutatorEngine(groq_client=groq)
+        # Groq client for judge (can be cheaper/faster model)
+        groq_judge = GroqClient(
+            api_key=config.get("groq_api_key", ""),
+            url=config.get("groq_url", "https://api.groq.com/openai/v1/chat/completions"),
+            model=config.get("groq_judge_model", config.get("groq_model", "llama-3.3-70b-versatile")),
+        )
+
+        self.mutator  = MutatorEngine(groq_client=groq_attacker)
+        self.analyzer = AttackAnalyzer(groq_client=groq_judge)
+
+
 
         target_makers = {
             "easy":   make_easy_target,
@@ -44,7 +55,7 @@ class BaneCore:
         )
 
         self.judge = AttackJudge(
-            groq_client=groq,
+            groq_client=groq_judge,
             target_system_prompt=self.target.system_prompt,
         )
 
@@ -73,7 +84,12 @@ class BaneCore:
                     if "text" not in seed and "sequence" in seed:
                         seed["text"] = seed["sequence"][0]
                     seeds.append(seed)
-        print(f"Loaded {len(seeds)} seed attacks")
+                # Add breakthroughs from previous runs as seeds
+        breakthroughs = self.log.export_breakthroughs_as_seeds()
+        if breakthroughs:
+            seeds.extend(breakthroughs)
+            print(f"Loaded {len(breakthroughs)} breakthrough seeds from previous runs")
+
         return seeds
 
     async def run_iteration(self) -> dict:
@@ -89,10 +105,19 @@ class BaneCore:
             recent_failures=self.log.get_near_misses(limit=3),
             target_info=self.target.get_info(),
             benign_probe_results=self.benign_results,
+            recent_insights=self.log.get_recent_insights(limit=5),
         )
 
         result    = await self.executor.execute(mutated)
         attack_id = self.log.log(result)
+
+        # Analyze interesting results (not pure refusals)
+        if result.success_score >= 0.3:
+            try:
+                analysis = await self.analyzer.analyze(result, self.target.defenses)
+                self.log.update_analysis(attack_id, analysis)
+            except Exception:
+                pass
 
         return {
             "iteration":       self.iteration,

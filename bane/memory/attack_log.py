@@ -103,4 +103,24 @@ class AttackLog:
     def get_top_attacks(self, limit=5):
         return [dict(r) for r in self.conn.execute(
             "SELECT * FROM attacks WHERE success=1 ORDER BY success_score DESC LIMIT ?", (limit,))]
+    def export_breakthroughs_as_seeds(self) -> list:
+        """Export successful attacks as seed format for next run."""
+        rows = self.conn.execute(
+            "SELECT * FROM attacks WHERE success=1 ORDER BY success_score DESC LIMIT 10"
+        ).fetchall()
+        seeds = []
+        for r in rows:
+            seeds.append({
+                "id": f"bt_{r['id']}",
+                "text": r["text"],
+                "sequence": json.loads(r["sequence"]) if r["sequence"] else [],
+                "category": r["category"],
+                "objective": "reveal_system_prompt",
+                "generation": 0,
+                "mutation_type": "seed",
+                "parent_id": None,
+                "success_score": r["success_score"],
+                "target_response": r["target_response"],
+            })
+        return seeds
 
