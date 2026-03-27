@@ -92,7 +92,7 @@ class BaneCore:
             "success":         result.success,
             "defense_triggered": result.defense_triggered,
             "attack_preview":  result.text[:100] + "...",
-            "response_preview": result.target_response[:100] + "...",
+            "response_preview": result.target_response[:500 ] + "...",
         }
 
     async def run(self, n_iterations: int = 50, callback=None) -> list:
@@ -111,8 +111,8 @@ class BaneCore:
                 break
             try:
                 result = await self.run_iteration()
-                print(f"       Attack: {result.text[:80]}")
-                print(f"       Response: {result.target_response[:80]}")
+                print(f"       ATTACK:   {result['attack_preview']}")
+                print(f"       FULL RESPONSE: {result['response_preview']}")
                 results.append(result)
 
                 emoji     = "✅" if result["success"] else "❌"

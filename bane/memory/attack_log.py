@@ -53,8 +53,13 @@ class AttackLog:
             "SELECT * FROM attacks WHERE success=1 ORDER BY success_score DESC LIMIT ?", (limit,))]
 
     def get_near_misses(self, limit=10):
-        return [dict(r) for r in self.conn.execute(
-            "SELECT * FROM attacks WHERE success_score BETWEEN 0.3 AND 0.7 ORDER BY success_score DESC LIMIT ?", (limit,))]
+        rows = self.conn.execute(
+            """SELECT * FROM attacks 
+            WHERE success_score BETWEEN 0.3 AND 0.7
+            ORDER BY success_score DESC, RANDOM()
+            LIMIT ?""", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def get_strategy_success_rates(self, last_n=50):
         rows = self.conn.execute(
