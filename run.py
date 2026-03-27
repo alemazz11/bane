@@ -12,9 +12,10 @@ async def main():
     config = as_dict()
 
     print("🔥 BANE — Self-Evolving Prompt Injection Red Team Agent")
-    print(f"   Attacker: {config['attacker_model']}")
-    print(f"   Target:   {config['target_model']}")
-    print(f"   Judge:    {config['judge_model']}")
+    print(f"   Attacker: Groq {config['groq_model']}")
+    print(f"   Target:   {config['target_model']} (local)")
+    print(f"   Judge:    Groq {config['groq_model']}")
+    print(f"   Analyzer: Groq {config['groq_model']}")
     print(f"   Difficulty: {config['target_difficulty']}")
 
     bane = BaneCore(config)

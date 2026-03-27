@@ -83,3 +83,24 @@ class AttackLog:
             current = row["parent_id"]
         lineage.reverse()
         return lineage
+    def update_analysis(self, attack_id: str, analysis: dict):
+        self.conn.execute(
+            "UPDATE attacks SET analysis=? WHERE id=?",
+            (json.dumps(analysis), attack_id))
+        self.conn.commit()
+
+    def get_recent_insights(self, limit=5) -> list:
+        rows = self.conn.execute(
+            "SELECT analysis FROM attacks WHERE analysis != '{}' ORDER BY timestamp DESC LIMIT ?",
+            (limit,))
+        results = []
+        for r in rows:
+            try:
+                results.append(json.loads(r["analysis"]))
+            except (json.JSONDecodeError, TypeError):
+                continue
+        return results
+    def get_top_attacks(self, limit=5):
+        return [dict(r) for r in self.conn.execute(
+            "SELECT * FROM attacks WHERE success=1 ORDER BY success_score DESC LIMIT ?", (limit,))]
+

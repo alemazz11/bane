@@ -19,21 +19,21 @@ def _load_env(path: str = ".env"):
 _load_env()
 
 OLLAMA_URL        = os.getenv("OLLAMA_URL",        "http://localhost:11434")
-ATTACKER_MODEL    = os.getenv("ATTACKER_MODEL",    "qwen2.5:7b")
+GROQ_API_KEY      = os.getenv("GROQ_API_KEY",      "")
+GROQ_URL          = os.getenv("GROQ_URL",          "https://api.groq.com/openai/v1/chat/completions")
+GROQ_MODEL        = os.getenv("GROQ_MODEL",        "llama-3.3-70b-versatile")
 TARGET_MODEL      = os.getenv("TARGET_MODEL",      "llama3.2:3b")
-JUDGE_MODEL       = os.getenv("JUDGE_MODEL",       "qwen2.5:7b")
-ANALYZER_MODEL    = os.getenv("ANALYZER_MODEL",    "phi3.5:latest")
-TARGET_DIFFICULTY = os.getenv("TARGET_DIFFICULTY", "easy")
+TARGET_DIFFICULTY  = os.getenv("TARGET_DIFFICULTY",  "medium")
 DB_PATH           = os.getenv("DB_PATH",           "data/attacks.db")
 
 
 def as_dict() -> dict:
     return {
         "ollama_url":        OLLAMA_URL,
-        "attacker_model":    ATTACKER_MODEL,
+        "groq_api_key":      GROQ_API_KEY,
+        "groq_url":          GROQ_URL,
+        "groq_model":        GROQ_MODEL,
         "target_model":      TARGET_MODEL,
-        "judge_model":       JUDGE_MODEL,
-        "analyzer_model":    ANALYZER_MODEL,
         "target_difficulty": TARGET_DIFFICULTY,
         "db_path":           DB_PATH,
     }

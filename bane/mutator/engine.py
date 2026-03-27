@@ -1,22 +1,20 @@
-"""Core mutation engine — uses Ollama to generate new attacks"""
+"""Core mutation engine — uses Groq to generate new attacks"""
 
 import json
 import random
-import httpx
+from ..groq_client import GroqClient
 from .strategies import MutationType
 from .prompts import build_mutation_prompt, MUTATOR_SYSTEM_PROMPT
 
 
 class MutatorEngine:
 
-    def __init__(self, ollama_url="http://localhost:11434", model="qwen2.5:7b"):
-        self.ollama_url = ollama_url
-        self.model = model
-        self.client = httpx.AsyncClient(timeout=120)
+    def __init__(self, groq_client: GroqClient):
+        self.groq = groq_client
 
     async def mutate(self, parent: dict, strategy: MutationType,
                      recent_successes: list, recent_failures: list,
-                     target_info: dict) -> dict:
+                     target_info: dict, insights: list = None) -> dict:
 
         prompt = build_mutation_prompt(
             parent_attack=parent,
@@ -24,22 +22,17 @@ class MutatorEngine:
             recent_successes=recent_successes,
             recent_failures=recent_failures,
             target_info=target_info,
+            insights=insights,
         )
 
-        response = await self.client.post(
-            f"{self.ollama_url}/api/chat",
-            json={
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": MUTATOR_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                "stream": False,
-                "options": {"temperature": 0.9, "num_predict": 1024},
-            },
+        raw = await self.groq.chat(
+            messages=[
+                {"role": "system", "content": MUTATOR_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.9,
         )
 
-        raw = response.json()["message"]["content"]
         return self._parse_response(raw, parent, strategy)
 
     def _parse_response(self, raw: str, parent: dict, strategy: MutationType) -> dict:
@@ -72,12 +65,7 @@ class MutatorEngine:
 
     def select_strategy(self, attack_log) -> MutationType:
         stats = attack_log.get_strategy_success_rates(last_n=50)
-        
-        # 50% exploration sempre — non convergere troppo presto
-        if random.random() < 0.5:
-            return random.choice(list(MutationType))
-        
-        if stats:
+        if random.random() < 0.7 and stats:
             strategies = list(stats.keys())
             weights = [max(stats[s], 0.01) for s in strategies]
             chosen = random.choices(strategies, weights=weights, k=1)[0]
@@ -85,23 +73,16 @@ class MutatorEngine:
                 return MutationType(chosen)
             except ValueError:
                 pass
-        
         return random.choice(list(MutationType))
 
     def select_parent(self, attack_log, seed_library: list) -> dict:
         roll = random.random()
-        
-        if roll < 0.25:
-            # 25% — near-misses
+        if roll < 0.4:
             candidates = attack_log.get_near_misses(limit=10)
             if candidates:
                 return random.choice(candidates)
-        
-        elif roll < 0.45:
-            # 20% — successi
+        elif roll < 0.7:
             candidates = attack_log.get_successful(limit=10)
             if candidates:
                 return random.choice(candidates)
-        
-        # 55% — seed freschi (molto più alto di prima)
         return random.choice(seed_library)

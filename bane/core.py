@@ -1,14 +1,17 @@
 """BANE Core Engine"""
 
+"""BANE Core Engine"""
+
 import asyncio
-from unittest import result
 import yaml
 from pathlib import Path
+from .groq_client import GroqClient
 from .mutator.engine import MutatorEngine
 from .runner.executor import AttackExecutor
 from .runner.targets import make_easy_target, make_medium_target, make_hard_target
 from .runner.judge import AttackJudge
 from .memory.attack_log import AttackLog
+from .runner.analyzer import AttackAnalyzer
 
 
 class BaneCore:
@@ -16,11 +19,17 @@ class BaneCore:
     def __init__(self, config: dict = None):
         config = config or {}
 
-        ollama_url      = config.get("ollama_url",      "http://localhost:11434")
-        attacker_model  = config.get("attacker_model",  "qwen2.5:7b")
-        difficulty      = config.get("target_difficulty", "easy")
+        ollama_url = config.get("ollama_url", "http://localhost:11434")
 
-        self.mutator = MutatorEngine(ollama_url=ollama_url, model=attacker_model)
+        groq = GroqClient(
+            api_key=config.get("groq_api_key", ""),
+            url=config.get("groq_url", "https://api.groq.com/openai/v1/chat/completions"),
+            model=config.get("groq_model", "llama-3.3-70b-versatile"),
+        )
+
+        difficulty = config.get("target_difficulty", "medium")
+
+        self.mutator = MutatorEngine(groq_client=groq)
 
         target_makers = {
             "easy":   make_easy_target,
@@ -33,16 +42,20 @@ class BaneCore:
         )
 
         self.judge = AttackJudge(
-            ollama_url=ollama_url,
-            judge_model=config.get("judge_model", attacker_model),
+            groq_client=groq,
             target_system_prompt=self.target.system_prompt,
         )
 
         self.executor = AttackExecutor(self.target, self.judge)
+        self.analyzer = AttackAnalyzer(groq_client=groq)
+
         self.log      = AttackLog(config.get("db_path", "data/attacks.db"))
         self.seeds    = self._load_seeds()
         self.iteration = 0
         self.running   = False
+
+   
+
 
     def _load_seeds(self) -> list:
         seeds = []
@@ -77,10 +90,15 @@ class BaneCore:
             recent_successes=self.log.get_successful(limit=3),
             recent_failures=self.log.get_near_misses(limit=3),
             target_info=self.target.get_info(),
+            insights=self.log.get_recent_insights(limit=3),
         )
+
 
         result    = await self.executor.execute(mutated)
         attack_id = self.log.log(result)
+        # Analyze why it worked/failed
+        analysis = await self.analyzer.analyze(result, self.target.defenses)
+        self.log.update_analysis(attack_id, analysis)
 
         return {
             "iteration":       self.iteration,
@@ -129,9 +147,14 @@ class BaneCore:
 
                 if result["success"]:
                     print(f"       🎯 BREAKTHROUGH: {result['attack_preview']}")
-
+                    print(f"       FULL RESPONSE: {result['response_preview']}")
                 if callback:
                     callback(result)
+                if self.iteration % 10 == 0:
+                    stats = self.log.get_stats()
+                    print(f"\n   --- checkpoint [{self.iteration}] ---")
+                    print(f"   success rate: {stats['success_rate']:.1%}  |  avg score: {stats['avg_score']:.3f}  |  breakthroughs: {stats['successful_attacks']}")
+                    print(f"   ---\n")
 
             except Exception as e:
                 print(f"[{i+1:4d}] ⚠️  Error: {e}")
@@ -144,6 +167,20 @@ class BaneCore:
         print(f"   Avg score:     {stats['avg_score']:.3f}")
         print(f"   Max generation: {stats['max_generation']}")
         print(f"   Breakthroughs: {stats['successful_attacks']}")
+
+        strat_rates = self.log.get_strategy_success_rates(last_n=100)
+        if strat_rates:
+            print(f"\n   Strategy effectiveness:")
+            for strat, rate in sorted(strat_rates.items(), key=lambda x: x[1], reverse=True):
+                bar = "█" * int(rate * 20)
+                print(f"   {strat:15s} {rate:.2f} [{bar}]")
+        top = self.log.get_top_attacks(5)
+        if top:
+            print(f"\n   🏆 Top {len(top)} breakthroughs:")
+            for i, a in enumerate(top, 1):
+                print(f"\n   [{i}] score={a['success_score']:.2f} | {a['mutation_type']} | gen={a['generation']}")
+                print(f"       attack: {a['text'][:120]}")
+                print(f"       response: {a['target_response'][:120]}")
 
         return results
 
