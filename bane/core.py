@@ -8,7 +8,7 @@ from pathlib import Path
 from .groq_client import GroqClient
 from .mutator.engine import MutatorEngine
 from .runner.executor import AttackExecutor
-from .runner.targets import make_easy_target, make_medium_target, make_hard_target
+from .runner.targets import make_easy_target, make_medium_target, make_hard_target,make_v2_target
 from .runner.judge import AttackJudge
 from .memory.attack_log import AttackLog
 from .runner.analyzer import AttackAnalyzer
@@ -35,6 +35,7 @@ class BaneCore:
             "easy":   make_easy_target,
             "medium": make_medium_target,
             "hard":   make_hard_target,
+            "v2": make_v2_target,
         }
         self.target = target_makers[difficulty](
             model=config.get("target_model", "llama3.2:3b"),
@@ -99,6 +100,7 @@ class BaneCore:
         # Analyze why it worked/failed
         analysis = await self.analyzer.analyze(result, self.target.defenses)
         self.log.update_analysis(attack_id, analysis)
+        await asyncio.sleep(2)
 
         return {
             "iteration":       self.iteration,
@@ -109,8 +111,8 @@ class BaneCore:
             "score":           result.success_score,
             "success":         result.success,
             "defense_triggered": result.defense_triggered,
-            "attack_preview":  result.text[:100] + "...",
-            "response_preview": result.target_response[:500 ] + "...",
+            "attack_preview":  result.text,
+            "response_preview": result.target_response,
         }
 
     async def run(self, n_iterations: int = 50, callback=None) -> list:
