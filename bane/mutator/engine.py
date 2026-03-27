@@ -71,9 +71,13 @@ class MutatorEngine:
             }
 
     def select_strategy(self, attack_log) -> MutationType:
-        """70% exploitation, 30% exploration."""
         stats = attack_log.get_strategy_success_rates(last_n=50)
-        if random.random() < 0.7 and stats:
+        
+        # 50% exploration sempre — non convergere troppo presto
+        if random.random() < 0.5:
+            return random.choice(list(MutationType))
+        
+        if stats:
             strategies = list(stats.keys())
             weights = [max(stats[s], 0.01) for s in strategies]
             chosen = random.choices(strategies, weights=weights, k=1)[0]
@@ -81,17 +85,23 @@ class MutatorEngine:
                 return MutationType(chosen)
             except ValueError:
                 pass
+        
         return random.choice(list(MutationType))
 
     def select_parent(self, attack_log, seed_library: list) -> dict:
-        """40% near-misses, 30% successi, 30% seed freschi."""
         roll = random.random()
-        if roll < 0.4:
+        
+        if roll < 0.25:
+            # 25% — near-misses
             candidates = attack_log.get_near_misses(limit=10)
             if candidates:
                 return random.choice(candidates)
-        elif roll < 0.7:
+        
+        elif roll < 0.45:
+            # 20% — successi
             candidates = attack_log.get_successful(limit=10)
             if candidates:
                 return random.choice(candidates)
+        
+        # 55% — seed freschi (molto più alto di prima)
         return random.choice(seed_library)
