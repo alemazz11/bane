@@ -12,19 +12,16 @@ class MutatorEngine:
     def __init__(self, groq_client: GroqClient):
         self.groq = groq_client
 
-    async def mutate(self, parent: dict, strategy: MutationType,
-                     recent_successes: list, recent_failures: list,
-                     target_info: dict, insights: list = None) -> dict:
-
+    async def mutate(self, parent, strategy, recent_successes,
+                     recent_failures, target_info, benign_probe_results=None) -> dict:
         prompt = build_mutation_prompt(
             parent_attack=parent,
             strategy=strategy.value,
             recent_successes=recent_successes,
             recent_failures=recent_failures,
             target_info=target_info,
-            insights=insights,
+            benign_probe_results=benign_probe_results,
         )
-
         raw = await self.groq.chat(
             messages=[
                 {"role": "system", "content": MUTATOR_SYSTEM_PROMPT},
