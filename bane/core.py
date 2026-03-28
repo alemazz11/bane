@@ -109,13 +109,12 @@ class BaneCore:
         result    = await self.executor.execute(mutated)
         attack_id = self.log.log(result)
 
-        # Analyze interesting results (not pure refusals)
-        if result.success_score >= 0.3:
-            try:
-                analysis = await self.analyzer.analyze(result, self.target.defenses)
-                self.log.update_analysis(attack_id, analysis)
-            except Exception:
-                pass
+        # Analyze every attack so the mutator learns from failures too
+        try:
+            analysis = await self.analyzer.analyze(result, self.target.defenses)
+            self.log.update_analysis(attack_id, analysis)
+        except Exception:
+            pass
 
         return {
             "iteration":       self.iteration,
