@@ -104,6 +104,7 @@ class BaneCore:
             recent_failures=self.log.get_near_misses(limit=3),
             target_info=self.target.get_info(),
             recent_insights=self.log.get_aggregated_insights(limit=20),
+            seed_library=self.seeds,
         )
 
         result    = await self.executor.execute(mutated)
@@ -144,6 +145,9 @@ class BaneCore:
                 print("\n⏹ Stopped.")
                 break
             try:
+                # Rate limit: ~10s between iterations to stay under Groq TPM
+                if i > 0:
+                    await asyncio.sleep(10)
                 result = await self.run_iteration()
                 results.append(result)
 

@@ -15,7 +15,15 @@ class MutatorEngine:
 
     async def mutate(self, parent, strategy, recent_successes,
                      recent_failures, target_info,
-                     recent_insights=None) -> dict:
+                     recent_insights=None, seed_library=None) -> dict:
+        # Find seed examples matching the strategy (category name = strategy value)
+        strategy_examples = []
+        if seed_library:
+            strategy_examples = [
+                s for s in seed_library
+                if s.get("category") == strategy.value
+            ][:2]  # max 2 examples
+
         prompt = build_mutation_prompt(
             parent_attack=parent,
             strategy=strategy.value,
@@ -23,6 +31,7 @@ class MutatorEngine:
             recent_failures=recent_failures,
             target_info=target_info,
             recent_insights=recent_insights,
+            strategy_examples=strategy_examples,
         )
         raw = await self.groq.chat(
             messages=[
