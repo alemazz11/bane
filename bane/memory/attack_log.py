@@ -111,6 +111,53 @@ class AttackLog:
     def get_top_attacks(self, limit=5):
         return [dict(r) for r in self.conn.execute(
             "SELECT * FROM attacks WHERE success=1 ORDER BY success_score DESC LIMIT ?", (limit,))]
+    def get_aggregated_insights(self, limit=20) -> list:
+        """Aggregate recent analyses into top patterns with frequency."""
+        raw = self.get_recent_insights(limit=limit)
+        if not raw:
+            return []
+
+        pattern_counts = {}
+        technique_counts = {}
+        suggestion_counts = {}
+
+        for ins in raw:
+            p = ins.get("pattern", "")
+            if p:
+                pattern_counts[p] = pattern_counts.get(p, 0) + 1
+            t = ins.get("key_technique", "")
+            if t and t != "unknown":
+                technique_counts[t] = technique_counts.get(t, 0) + 1
+            s = ins.get("suggested_next_mutation", "")
+            if s:
+                suggestion_counts[s] = suggestion_counts.get(s, 0) + 1
+
+        total = len(raw)
+        aggregated = []
+
+        for pattern, count in sorted(pattern_counts.items(), key=lambda x: -x[1])[:5]:
+            aggregated.append({
+                "type": "pattern",
+                "value": pattern,
+                "frequency": count,
+                "confidence": round(count / total, 2),
+            })
+        for technique, count in sorted(technique_counts.items(), key=lambda x: -x[1])[:3]:
+            aggregated.append({
+                "type": "technique",
+                "value": technique,
+                "frequency": count,
+                "confidence": round(count / total, 2),
+            })
+        for suggestion, count in sorted(suggestion_counts.items(), key=lambda x: -x[1])[:3]:
+            aggregated.append({
+                "type": "suggestion",
+                "value": suggestion,
+                "frequency": count,
+                "confidence": round(count / total, 2),
+            })
+
+        return aggregated
     def export_breakthroughs_as_seeds(self) -> list:
         """Export successful attacks as seed format for next run."""
         rows = self.conn.execute(

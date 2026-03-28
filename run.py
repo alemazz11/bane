@@ -32,29 +32,5 @@ async def main():
             bar = "█" * int(avg * 20) + "░" * (20 - int(avg * 20))
             print(f"   {strat:25s} [{bar}] {avg:.3f}")
 
-    # ── Top breakthroughs with lineage ──────────────────────────
-    best = bane.log.get_successful(limit=5)
-    if best:
-        print("\n🏆 TOP ATTACKS DISCOVERED:")
-        for i, attack in enumerate(best):
-            print(f"\n--- #{i+1} (score: {attack['success_score']}) ---")
-            print(f"Category:   {attack['category']}")
-            print(f"Strategy:   {attack['mutation_type']}")
-            print(f"Generation: {attack['generation']}")
-            print(f"Attack:     {attack['text'][:300]}")
-            print(f"Response:   {attack['target_response'][:300]}")
-
-            # Show evolution chain
-            lineage = bane.log.get_lineage(attack["id"])
-            if len(lineage) > 1:
-                chain = " → ".join(
-                    f"gen{a['generation']}:{a['mutation_type']}({a['success_score']:.1f})"
-                    for a in lineage
-                )
-                print(f"Evolution:  {chain}")
-    else:
-        print("\n❌ No breakthroughs this run.")
-
-
 if __name__ == "__main__":
     asyncio.run(main())

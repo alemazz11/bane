@@ -29,3 +29,6 @@ class MutationType(Enum):
     PAYLOAD_SPLITTING    = "payload_splitting"
     ROLE_HIJACKING       = "role_hijacking"
     TASK_HIJACKING       = "task_hijacking"
+    DELIMITER_ATTACKS    = "delimiter_attacks"
+    JAILBREAK_VARIANTS   = "jailbreak_variants"
+    CONTEXT_PADDING      = "context_padding"

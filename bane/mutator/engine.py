@@ -68,7 +68,7 @@ class MutatorEngine:
         total_pulls = sum(s["count"] for s in stats.values()) if stats else 0
 
         # Not enough data yet — explore randomly
-        if total_pulls < len(all_strategies):
+        if total_pulls < 10:
             # Pick a strategy we haven't tried, or random if all tried
             untried = [s for s in all_strategies if s.value not in stats]
             if untried:
@@ -99,14 +99,25 @@ class MutatorEngine:
         if roll < 0.4:
             candidates = attack_log.get_near_misses(limit=10)
             if candidates:
+                weights = [(c.get("success_score", 0.3) ** 2) for c in candidates]
+                total = sum(weights)
+                if total > 0:
+                    return random.choices(candidates, weights=weights, k=1)[0]
                 return random.choice(candidates)
         elif roll < 0.7:
             candidates = attack_log.get_successful(limit=10)
             if candidates:
+                weights = [c.get("success_score", 0.5) for c in candidates]
+                total = sum(weights)
+                if total > 0:
+                    return random.choices(candidates, weights=weights, k=1)[0]
                 return random.choice(candidates)
         # Prefer breakthrough seeds over base seeds
         breakthroughs = [s for s in seed_library if s.get("success_score", 0) > 0]
         if breakthroughs and random.random() < 0.6:
+            weights = [s.get("success_score", 0.1) for s in breakthroughs]
+            total = sum(weights)
+            if total > 0:
+                return random.choices(breakthroughs, weights=weights, k=1)[0]
             return random.choice(breakthroughs)
         return random.choice(seed_library)
-

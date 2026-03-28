@@ -36,4 +36,7 @@ class AttackAnalyzer:
             "defense_interaction": "unknown",
             "pattern": "",
             "suggested_next_mutation": "",
+            "refusal_type": "unknown",
+            "confidence": 0.0,
+            "alternative_strategies": [],
         }

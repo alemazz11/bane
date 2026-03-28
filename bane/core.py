@@ -103,7 +103,7 @@ class BaneCore:
             recent_successes=self.log.get_successful(limit=3),
             recent_failures=self.log.get_near_misses(limit=3),
             target_info=self.target.get_info(),
-            recent_insights=self.log.get_recent_insights(limit=5),
+            recent_insights=self.log.get_aggregated_insights(limit=20),
         )
 
         result    = await self.executor.execute(mutated)
