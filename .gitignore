@@ -208,3 +208,5 @@ __marimo__/
 
 .claude/
 .env
+CLAUDE.md
+data/attacks.db

@@ -66,6 +66,14 @@ class AttackLog:
             "SELECT mutation_type, AVG(success_score) as avg FROM (SELECT * FROM attacks ORDER BY timestamp DESC LIMIT ?) GROUP BY mutation_type", (last_n,))
         return {r["mutation_type"]: r["avg"] for r in rows}
 
+    def get_strategy_stats(self, last_n=100):
+        """Returns {strategy: {"avg": float, "count": int}} for UCB1."""
+        rows = self.conn.execute(
+            """SELECT mutation_type, AVG(success_score) as avg, COUNT(*) as cnt
+               FROM (SELECT * FROM attacks ORDER BY timestamp DESC LIMIT ?)
+               GROUP BY mutation_type""", (last_n,))
+        return {r["mutation_type"]: {"avg": r["avg"], "count": r["cnt"]} for r in rows}
+
     def get_stats(self):
         total = self.conn.execute("SELECT COUNT(*) FROM attacks").fetchone()[0]
         succ = self.conn.execute("SELECT COUNT(*) FROM attacks WHERE success=1").fetchone()[0]

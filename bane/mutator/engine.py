@@ -1,6 +1,7 @@
 """Core mutation engine — uses Groq to generate new attacks"""
 
 import json
+import math
 import random
 from ..groq_client import GroqClient
 from .strategies import MutationType
@@ -13,7 +14,7 @@ class MutatorEngine:
         self.groq = groq_client
 
     async def mutate(self, parent, strategy, recent_successes,
-                     recent_failures, target_info, benign_probe_results=None,
+                     recent_failures, target_info,
                      recent_insights=None) -> dict:
         prompt = build_mutation_prompt(
             parent_attack=parent,
@@ -21,7 +22,6 @@ class MutatorEngine:
             recent_successes=recent_successes,
             recent_failures=recent_failures,
             target_info=target_info,
-            benign_probe_results=benign_probe_results,
             recent_insights=recent_insights,
         )
         raw = await self.groq.chat(
@@ -63,16 +63,36 @@ class MutatorEngine:
             }
 
     def select_strategy(self, attack_log) -> MutationType:
-        stats = attack_log.get_strategy_success_rates(last_n=50)
-        if random.random() < 0.7 and stats:
-            strategies = list(stats.keys())
-            weights = [max(stats[s], 0.01) for s in strategies]
-            chosen = random.choices(strategies, weights=weights, k=1)[0]
-            try:
-                return MutationType(chosen)
-            except ValueError:
-                pass
-        return random.choice(list(MutationType))
+        all_strategies = list(MutationType)
+        stats = attack_log.get_strategy_stats(last_n=100)
+        total_pulls = sum(s["count"] for s in stats.values()) if stats else 0
+
+        # Not enough data yet — explore randomly
+        if total_pulls < len(all_strategies):
+            # Pick a strategy we haven't tried, or random if all tried
+            untried = [s for s in all_strategies if s.value not in stats]
+            if untried:
+                return random.choice(untried)
+            return random.choice(all_strategies)
+
+        # UCB1: score = avg_reward + C * sqrt(ln(total) / strategy_count)
+        C = 1.4  # exploration constant (sqrt(2) ≈ 1.41)
+        ln_total = math.log(total_pulls)
+
+        best_score = -1
+        best_strategy = None
+
+        for strategy in all_strategies:
+            s = stats.get(strategy.value)
+            if s is None:
+                # Never tried — infinite exploration bonus, pick it
+                return strategy
+            ucb = s["avg"] + C * math.sqrt(ln_total / s["count"])
+            if ucb > best_score:
+                best_score = ucb
+                best_strategy = strategy
+
+        return best_strategy or random.choice(all_strategies)
 
     def select_parent(self, attack_log, seed_library: list) -> dict:
         roll = random.random()
