@@ -8,7 +8,7 @@ from .mutator.engine import MutatorEngine
 from .runner.executor import AttackExecutor
 from .runner.targets import (
     make_easy_target, make_medium_target, make_hard_target,
-    make_v2_target,
+    make_v2_target, make_v3_target,
 )
 from .runner.judge import AttackJudge
 from .runner.analyzer import AttackAnalyzer
@@ -48,6 +48,7 @@ class BaneCore:
             "medium": make_medium_target,
             "hard":   make_hard_target,
             "v2":     make_v2_target,
+            "v3":     make_v3_target,
         }
         self.target = target_makers[difficulty](
             model=config.get("target_model", "llama3.2:3b"),
