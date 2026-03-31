@@ -1,4 +1,4 @@
-"""Mutator Strategies"""
+"""Mutator Strategies + Cluster Mapping for Thompson Sampling"""
 
 from enum import Enum
 
@@ -44,3 +44,45 @@ class MutationType(Enum):
     NESTED_PROMPTS       = "nested_prompts"
     CONFIDENCE_ELICITATION = "confidence_elicitation"
     SELF_DECEPTION       = "self_deception"
+    STEALTH_EXTRACTION   = "stealth_extraction"
+    PSYCHOLOGICAL_MANIPULATION = "psychological_manipulation"
+
+
+# 10 clusters for Thompson Sampling
+STRATEGY_CLUSTERS = {
+    "social_pressure": [
+        "emotional_manipulation", "persona_modulation", "many_shot",
+        "self_deception", "psychological_manipulation",
+    ],
+    "encoding": [
+        "obfuscate", "encoding_attacks", "cipher_attacks", "lang_switch",
+    ],
+    "structural": [
+        "delimiter_attacks", "nested_prompts", "direct_injection",
+        "context_manipulation", "context_padding",
+    ],
+    "creative": [
+        "creative_reframing", "deep_inception", "reframe",
+    ],
+    "stealth": [
+        "stealth_extraction", "negative_extraction", "soften",
+        "confidence_elicitation",
+    ],
+    "format": [
+        "format_manipulation", "output_constraints",
+    ],
+    "identity": [
+        "role_hijacking", "jailbreak_variants", "task_hijacking",
+    ],
+    "composition": [
+        "crossover", "chain", "wrap", "payload_splitting", "fragment",
+    ],
+    "logic": [
+        "logic_traps", "linguistic_confusion", "completion_attacks",
+        "extraction_attacks",
+    ],
+    "direct": [
+        "escalate", "anti_defense", "rephrase", "few_shot_priming",
+        "indirect_injection", "multi_turn",
+    ],
+}

@@ -6,10 +6,11 @@ from pathlib import Path
 
 class AttackLog:
 
-    def __init__(self, db_path="data/attacks.db"):
+    def __init__(self, db_path="data/attacks.db", target_id=None):
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        self.target_id = target_id or "default"
         self._init_db()
 
     def _init_db(self):
@@ -30,6 +31,20 @@ class AttackLog:
             CREATE INDEX IF NOT EXISTS idx_mutation ON attacks(mutation_type);
             CREATE INDEX IF NOT EXISTS idx_generation ON attacks(generation);
         """)
+        # Migrate: add target_id column if missing (existing DBs)
+        try:
+            self.conn.execute("SELECT target_id FROM attacks LIMIT 1")
+        except sqlite3.OperationalError:
+            self.conn.execute("ALTER TABLE attacks ADD COLUMN target_id TEXT DEFAULT 'default'")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_target ON attacks(target_id)")
+        # Thompson Sampling params table
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS cluster_params (
+                target_id TEXT PRIMARY KEY,
+                params TEXT DEFAULT '{}',
+                updated_at REAL
+            )
+        """)
         self.conn.commit()
 
     def log(self, result) -> str:
@@ -38,47 +53,60 @@ class AttackLog:
             INSERT OR REPLACE INTO attacks
             (id, text, sequence, category, mutation_type, parent_id,
              generation, target_response, success, success_score,
-             defense_triggered, defense_type, reasoning, latency_ms, timestamp)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+             defense_triggered, defense_type, reasoning, latency_ms, timestamp,
+             target_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (aid, result.text, json.dumps(result.sequence), result.category,
              result.mutation_type, result.parent_id, result.generation,
              result.target_response, int(result.success), result.success_score,
              int(result.defense_triggered), result.defense_type,
-             result.reasoning, result.latency_ms, result.timestamp))
+             result.reasoning, result.latency_ms, result.timestamp,
+             self.target_id))
         self.conn.commit()
         return aid
 
+    def _t(self):
+        """Target filter clause."""
+        return "target_id = ?"
+
+    def _tp(self):
+        """Target filter param."""
+        return (self.target_id,)
+
     def get_successful(self, limit=10):
         return [dict(r) for r in self.conn.execute(
-            "SELECT * FROM attacks WHERE success=1 ORDER BY success_score DESC LIMIT ?", (limit,))]
+            f"SELECT * FROM attacks WHERE success=1 AND {self._t()} ORDER BY success_score DESC LIMIT ?",
+            self._tp() + (limit,))]
 
     def get_near_misses(self, limit=10):
         rows = self.conn.execute(
-            """SELECT * FROM attacks 
-            WHERE success_score BETWEEN 0.3 AND 0.7
+            f"""SELECT * FROM attacks
+            WHERE success_score BETWEEN 0.3 AND 0.7 AND {self._t()}
             ORDER BY success_score DESC, RANDOM()
-            LIMIT ?""", (limit,)
+            LIMIT ?""", self._tp() + (limit,)
         ).fetchall()
         return [dict(r) for r in rows]
 
     def get_strategy_success_rates(self, last_n=50):
         rows = self.conn.execute(
-            "SELECT mutation_type, AVG(success_score) as avg FROM (SELECT * FROM attacks ORDER BY timestamp DESC LIMIT ?) GROUP BY mutation_type", (last_n,))
+            f"SELECT mutation_type, AVG(success_score) as avg FROM (SELECT * FROM attacks WHERE {self._t()} ORDER BY timestamp DESC LIMIT ?) GROUP BY mutation_type",
+            self._tp() + (last_n,))
         return {r["mutation_type"]: r["avg"] for r in rows}
 
     def get_strategy_stats(self, last_n=100):
         """Returns {strategy: {"avg": float, "count": int}} for UCB1."""
         rows = self.conn.execute(
-            """SELECT mutation_type, AVG(success_score) as avg, COUNT(*) as cnt
-               FROM (SELECT * FROM attacks ORDER BY timestamp DESC LIMIT ?)
-               GROUP BY mutation_type""", (last_n,))
+            f"""SELECT mutation_type, AVG(success_score) as avg, COUNT(*) as cnt
+               FROM (SELECT * FROM attacks WHERE {self._t()} ORDER BY timestamp DESC LIMIT ?)
+               GROUP BY mutation_type""", self._tp() + (last_n,))
         return {r["mutation_type"]: {"avg": r["avg"], "count": r["cnt"]} for r in rows}
 
     def get_stats(self):
-        total = self.conn.execute("SELECT COUNT(*) FROM attacks").fetchone()[0]
-        succ = self.conn.execute("SELECT COUNT(*) FROM attacks WHERE success=1").fetchone()[0]
-        avg = self.conn.execute("SELECT AVG(success_score) FROM attacks").fetchone()[0] or 0
-        maxg = self.conn.execute("SELECT MAX(generation) FROM attacks").fetchone()[0] or 0
+        t, tp = self._t(), self._tp()
+        total = self.conn.execute(f"SELECT COUNT(*) FROM attacks WHERE {t}", tp).fetchone()[0]
+        succ = self.conn.execute(f"SELECT COUNT(*) FROM attacks WHERE success=1 AND {t}", tp).fetchone()[0]
+        avg = self.conn.execute(f"SELECT AVG(success_score) FROM attacks WHERE {t}", tp).fetchone()[0] or 0
+        maxg = self.conn.execute(f"SELECT MAX(generation) FROM attacks WHERE {t}", tp).fetchone()[0] or 0
         return {"total_attacks": total, "successful_attacks": succ,
                 "success_rate": succ / max(total, 1), "avg_score": round(avg, 3), "max_generation": maxg}
 
@@ -99,8 +127,8 @@ class AttackLog:
 
     def get_recent_insights(self, limit=5) -> list:
         rows = self.conn.execute(
-            "SELECT analysis FROM attacks WHERE analysis != '{}' ORDER BY timestamp DESC LIMIT ?",
-            (limit,))
+            f"SELECT analysis FROM attacks WHERE analysis != '{{}}'  AND {self._t()} ORDER BY timestamp DESC LIMIT ?",
+            self._tp() + (limit,))
         results = []
         for r in rows:
             try:
@@ -110,7 +138,8 @@ class AttackLog:
         return results
     def get_top_attacks(self, limit=5):
         return [dict(r) for r in self.conn.execute(
-            "SELECT * FROM attacks WHERE success=1 ORDER BY success_score DESC LIMIT ?", (limit,))]
+            f"SELECT * FROM attacks WHERE success=1 AND {self._t()} ORDER BY success_score DESC LIMIT ?",
+            self._tp() + (limit,))]
     def get_aggregated_insights(self, limit=20) -> list:
         """Aggregate recent analyses into top patterns with frequency."""
         raw = self.get_recent_insights(limit=limit)
@@ -161,7 +190,8 @@ class AttackLog:
     def export_breakthroughs_as_seeds(self) -> list:
         """Export successful attacks as seed format for next run."""
         rows = self.conn.execute(
-            "SELECT * FROM attacks WHERE success=1 ORDER BY success_score DESC LIMIT 10"
+            f"SELECT * FROM attacks WHERE success=1 AND {self._t()} ORDER BY success_score DESC LIMIT 10",
+            self._tp()
         ).fetchall()
         seeds = []
         for r in rows:
@@ -178,4 +208,24 @@ class AttackLog:
                 "target_response": r["target_response"],
             })
         return seeds
+
+    def save_cluster_params(self, params: dict):
+        """Save Thompson Sampling params to DB."""
+        import time
+        self.conn.execute(
+            "INSERT OR REPLACE INTO cluster_params (target_id, params, updated_at) VALUES (?, ?, ?)",
+            (self.target_id, json.dumps(params), time.time()))
+        self.conn.commit()
+
+    def load_cluster_params(self) -> dict:
+        """Load Thompson Sampling params from DB. Returns None if not found."""
+        row = self.conn.execute(
+            "SELECT params FROM cluster_params WHERE target_id = ?",
+            (self.target_id,)).fetchone()
+        if row:
+            try:
+                return json.loads(row["params"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return None
 

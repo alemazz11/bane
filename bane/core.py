@@ -4,7 +4,9 @@ import asyncio
 import yaml
 from pathlib import Path
 from .groq_client import GroqClient
+from .ollama_client import OllamaClient
 from .mutator.engine import MutatorEngine
+from .mutator.critic import AttackCritic
 from .runner.executor import AttackExecutor
 from .runner.targets import (
     make_easy_target, make_medium_target, make_hard_target,
@@ -23,25 +25,22 @@ class BaneCore:
         ollama_url = config.get("ollama_url", "http://localhost:11434")
         difficulty = config.get("target_difficulty", "easy")
 
-        # Groq client shared by mutator + judge
-        # Groq client for attacker/mutator (creative model)
+        # Groq client for attacker/mutator only (the creative brain)
         groq_attacker = GroqClient(
             api_key=config.get("groq_api_key", ""),
             url=config.get("groq_url", "https://api.groq.com/openai/v1/chat/completions"),
             model=config.get("groq_model", "llama-3.3-70b-versatile"),
         )
 
-        # Groq client for judge (can be cheaper/faster model)
-        groq_judge = GroqClient(
-            api_key=config.get("groq_api_key", ""),
-            url=config.get("groq_url", "https://api.groq.com/openai/v1/chat/completions"),
-            model=config.get("groq_judge_model", config.get("groq_model", "llama-3.3-70b-versatile")),
+        # Local Ollama client for judge + analyzer + critic (no rate limits)
+        ollama_client = OllamaClient(
+            url=ollama_url,
+            model=config.get("target_model", "llama3.2:3b"),
         )
 
         self.mutator  = MutatorEngine(groq_client=groq_attacker)
-        self.analyzer = AttackAnalyzer(groq_client=groq_judge)
-
-
+        self.analyzer = AttackAnalyzer(groq_client=ollama_client)
+        self.critic   = AttackCritic(ollama_client=ollama_client)
 
         target_makers = {
             "easy":   make_easy_target,
@@ -56,15 +55,24 @@ class BaneCore:
         )
 
         self.judge = AttackJudge(
-            groq_client=groq_judge,
+            groq_client=ollama_client,  # Local Ollama, not Groq
             target_system_prompt=self.target.system_prompt,
         )
 
         self.executor = AttackExecutor(self.target, self.judge)
-        self.log      = AttackLog(config.get("db_path", "data/attacks.db"))
+        self.log      = AttackLog(
+            db_path=config.get("db_path", "data/attacks.db"),
+            target_id=difficulty,
+        )
         self.seeds    = self._load_seeds()
         self.iteration = 0
         self.running   = False
+
+        # Load persisted Thompson Sampling params
+        saved_params = self.log.load_cluster_params()
+        if saved_params:
+            self.mutator.cluster_params = saved_params
+            print(f"   Loaded Thompson Sampling params from previous run")
 
     def _load_seeds(self) -> list:
         seeds = []
@@ -84,11 +92,11 @@ class BaneCore:
                     if "text" not in seed and "sequence" in seed:
                         seed["text"] = seed["sequence"][0]
                     seeds.append(seed)
-                # Add breakthroughs from previous runs as seeds
+        # Add breakthroughs from previous runs as seeds
         breakthroughs = self.log.export_breakthroughs_as_seeds()
         if breakthroughs:
             seeds.extend(breakthroughs)
-            print(f"Loaded {len(breakthroughs)} breakthrough seeds from previous runs")
+            print(f"   Loaded {len(breakthroughs)} breakthrough seeds from previous runs")
 
         return seeds
 
@@ -108,8 +116,27 @@ class BaneCore:
             seed_library=self.seeds,
         )
 
+        # CRITIC: filter obvious attacks before sending
+        critique = await self.critic.evaluate(mutated["text"], strategy.value)
+        if not critique["pass"]:
+            for attempt in range(2):
+                refined = await self.critic.refine(
+                    mutated["text"], critique["suggestion"], strategy.value
+                )
+                if refined:
+                    mutated["text"] = refined
+                critique = await self.critic.evaluate(mutated["text"], strategy.value)
+                if critique["pass"]:
+                    break
+            else:
+                # After 2 fails, send anyway (don't over-filter)
+                self.critic.stats["sent_anyway"] += 1
+
         result    = await self.executor.execute(mutated)
         attack_id = self.log.log(result)
+
+        # Update Thompson Sampling with the score
+        self.mutator.update_cluster(strategy.value, result.success_score)
 
         # Analyze every attack so the mutator learns from failures too
         try:
@@ -118,10 +145,17 @@ class BaneCore:
         except Exception:
             pass
 
+        # Persist Thompson params every 10 iterations
+        if self.iteration % 10 == 0:
+            self.log.save_cluster_params(self.mutator.cluster_params)
+
+        cluster = self.mutator.get_cluster_for_strategy(strategy.value)
+
         return {
             "iteration":       self.iteration,
             "attack_id":       attack_id,
             "strategy":        strategy.value,
+            "cluster":         cluster,
             "category":        result.category,
             "generation":      result.generation,
             "score":           result.success_score,
@@ -129,9 +163,10 @@ class BaneCore:
             "defense_triggered": result.defense_triggered,
             "attack_preview":  result.text,
             "response_preview": result.target_response,
+            "critic_stealth":  critique.get("stealth_score", "?"),
         }
 
-    async def run(self, n_iterations: int = 50, callback=None) -> list:
+    async def run(self, n_iterations: int = 200, callback=None) -> list:
         self.running = True
         results = []
 
@@ -139,6 +174,9 @@ class BaneCore:
         print(f"   Target:  {self.target.description}")
         print(f"   Model:   {self.target.model}")
         print(f"   Seeds:   {len(self.seeds)}")
+        print(f"   Judge:   Local Ollama")
+        print(f"   Critic:  Local Ollama")
+        print(f"   Selection: Thompson Sampling (10 clusters)")
         print(f"   {'='*50}\n")
 
         for i in range(n_iterations):
@@ -146,9 +184,9 @@ class BaneCore:
                 print("\n⏹ Stopped.")
                 break
             try:
-                # Rate limit: ~10s between iterations to stay under Groq TPM
+                # Reduced sleep: only 1 Groq call now (mutator), rest is local
                 if i > 0:
-                    await asyncio.sleep(10)
+                    await asyncio.sleep(3)
                 result = await self.run_iteration()
                 results.append(result)
 
@@ -160,14 +198,15 @@ class BaneCore:
                     f"[{result['iteration']:4d}] {emoji} "
                     f"score={result['score']:.2f} [{bar_fill}{bar_empty}] "
                     f"gen={result['generation']} "
-                    f"strategy={result['strategy']:15s} "
-                    f"cat={result['category']}"
+                    f"strategy={result['strategy']:20s} "
+                    f"cluster={result['cluster']:12s} "
+                    f"stealth={result['critic_stealth']}"
                 )
                 print(f"       Attack: {result['attack_preview']}")
                 print(f"       Response: {result['response_preview']}")
 
                 if result["success"]:
-                    print(f"       🎯 BREAKTHROUGH: {result['attack_preview']}")
+                    print(f"       🎯 BREAKTHROUGH!")
 
                 if callback:
                     callback(result)
@@ -176,6 +215,9 @@ class BaneCore:
                 print(f"[{i+1:4d}] ⚠️  Error: {e}")
                 continue
 
+        # Save Thompson params at end
+        self.log.save_cluster_params(self.mutator.cluster_params)
+
         stats = self.log.get_stats()
         print(f"\n{'='*50}")
         print(f"🔥 BANE complete — {stats['total_attacks']} attacks")
@@ -183,6 +225,18 @@ class BaneCore:
         print(f"   Avg score:     {stats['avg_score']:.3f}")
         print(f"   Max generation: {stats['max_generation']}")
         print(f"   Breakthroughs: {stats['successful_attacks']}")
+        print(f"   {self.critic.get_stats_summary()}")
+
+        # Print Thompson cluster rankings
+        print(f"\n   📊 Cluster Rankings (Thompson α/β):")
+        ranked = sorted(
+            self.mutator.cluster_params.items(),
+            key=lambda x: x[1]["alpha"] / (x[1]["alpha"] + x[1]["beta"]),
+            reverse=True,
+        )
+        for name, p in ranked:
+            ratio = p["alpha"] / (p["alpha"] + p["beta"])
+            print(f"      {name:20s} α={p['alpha']:.1f} β={p['beta']:.1f} win_rate={ratio:.3f}")
 
         return results
 

@@ -10,18 +10,19 @@ async def main():
     Path("data").mkdir(exist_ok=True)
 
     config = as_dict()
-    judge_model = config.get("groq_judge_model") or config["groq_model"]
 
     print("🔥 BANE — Self-Evolving Prompt Injection Red Team Agent")
     print(f"   Attacker:  Groq {config['groq_model']}")
     print(f"   Target:    {config['target_model']} (local)")
-    print(f"   Judge:     Groq {judge_model}")
-    print(f"   Analyzer:  Groq {judge_model}")
+    print(f"   Judge:     Local Ollama {config['target_model']}")
+    print(f"   Critic:    Local Ollama {config['target_model']}")
+    print(f"   Analyzer:  Local Ollama {config['target_model']}")
+    print(f"   Selection: Thompson Sampling (10 clusters)")
     print(f"   Difficulty: {config['target_difficulty']}")
 
     bane = BaneCore(config)
 
-    results = await bane.run(n_iterations=50)
+    results = await bane.run(n_iterations=200)
 
     # ── Strategy effectiveness ──────────────────────────────────
     strat_rates = bane.log.get_strategy_success_rates(last_n=200)
