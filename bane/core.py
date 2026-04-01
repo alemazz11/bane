@@ -4,16 +4,13 @@ import asyncio
 import yaml
 from pathlib import Path
 from .groq_client import GroqClient
-from .ollama_client import OllamaClient
 from .mutator.engine import MutatorEngine
-from .mutator.critic import AttackCritic
 from .runner.executor import AttackExecutor
 from .runner.targets import (
     make_easy_target, make_medium_target, make_hard_target,
     make_v2_target, make_v3_target,
 )
 from .runner.judge import AttackJudge
-from .runner.analyzer import AttackAnalyzer
 from .memory.attack_log import AttackLog
 
 
@@ -25,22 +22,14 @@ class BaneCore:
         ollama_url = config.get("ollama_url", "http://localhost:11434")
         difficulty = config.get("target_difficulty", "easy")
 
-        # Groq client for attacker/mutator only (the creative brain)
+        # Groq client for attacker/mutator (the creative brain)
         groq_attacker = GroqClient(
             api_key=config.get("groq_api_key", ""),
             url=config.get("groq_url", "https://api.groq.com/openai/v1/chat/completions"),
             model=config.get("groq_model", "llama-3.3-70b-versatile"),
         )
 
-        # Local Ollama client for judge + analyzer + critic (no rate limits)
-        ollama_client = OllamaClient(
-            url=ollama_url,
-            model=config.get("target_model", "llama3.2:3b"),
-        )
-
-        self.mutator  = MutatorEngine(groq_client=groq_attacker)
-        self.analyzer = AttackAnalyzer(groq_client=ollama_client)
-        self.critic   = AttackCritic(ollama_client=ollama_client)
+        self.mutator = MutatorEngine(groq_client=groq_attacker)
 
         target_makers = {
             "easy":   make_easy_target,
@@ -54,19 +43,19 @@ class BaneCore:
             ollama_url=ollama_url,
         )
 
+        # Judge is pure rule-based — no LLM needed
         self.judge = AttackJudge(
-            groq_client=ollama_client,  # Local Ollama, not Groq
             target_system_prompt=self.target.system_prompt,
         )
 
         self.executor = AttackExecutor(self.target, self.judge)
-        self.log      = AttackLog(
+        self.log = AttackLog(
             db_path=config.get("db_path", "data/attacks.db"),
             target_id=difficulty,
         )
-        self.seeds    = self._load_seeds()
+        self.seeds = self._load_seeds()
         self.iteration = 0
-        self.running   = False
+        self.running = False
 
         # Load persisted Thompson Sampling params
         saved_params = self.log.load_cluster_params()
@@ -112,38 +101,14 @@ class BaneCore:
             recent_successes=self.log.get_successful(limit=3),
             recent_failures=self.log.get_near_misses(limit=3),
             target_info=self.target.get_info(),
-            recent_insights=self.log.get_aggregated_insights(limit=20),
             seed_library=self.seeds,
         )
-
-        # CRITIC: filter obvious attacks before sending
-        critique = await self.critic.evaluate(mutated["text"], strategy.value)
-        if not critique["pass"]:
-            for attempt in range(2):
-                refined = await self.critic.refine(
-                    mutated["text"], critique["suggestion"], strategy.value
-                )
-                if refined:
-                    mutated["text"] = refined
-                critique = await self.critic.evaluate(mutated["text"], strategy.value)
-                if critique["pass"]:
-                    break
-            else:
-                # After 2 fails, send anyway (don't over-filter)
-                self.critic.stats["sent_anyway"] += 1
 
         result    = await self.executor.execute(mutated)
         attack_id = self.log.log(result)
 
         # Update Thompson Sampling with the score
         self.mutator.update_cluster(strategy.value, result.success_score)
-
-        # Analyze every attack so the mutator learns from failures too
-        try:
-            analysis = await self.analyzer.analyze(result, self.target.defenses)
-            self.log.update_analysis(attack_id, analysis)
-        except Exception:
-            pass
 
         # Persist Thompson params every 10 iterations
         if self.iteration % 10 == 0:
@@ -152,47 +117,46 @@ class BaneCore:
         cluster = self.mutator.get_cluster_for_strategy(strategy.value)
 
         return {
-            "iteration":       self.iteration,
-            "attack_id":       attack_id,
-            "strategy":        strategy.value,
-            "cluster":         cluster,
-            "category":        result.category,
-            "generation":      result.generation,
-            "score":           result.success_score,
-            "success":         result.success,
+            "iteration":        self.iteration,
+            "attack_id":        attack_id,
+            "strategy":         strategy.value,
+            "cluster":          cluster,
+            "category":         result.category,
+            "generation":       result.generation,
+            "score":            result.success_score,
+            "success":          result.success,
             "defense_triggered": result.defense_triggered,
-            "attack_preview":  result.text,
+            "attack_preview":   result.text,
             "response_preview": result.target_response,
-            "critic_stealth":  critique.get("stealth_score", "?"),
+            "stealth_score":    mutated.get("stealth_score", "?"),
         }
 
     async def run(self, n_iterations: int = 200, callback=None) -> list:
         self.running = True
         results = []
 
-        print(f"\n🔥 BANE starting — {n_iterations} iterations")
-        print(f"   Target:  {self.target.description}")
-        print(f"   Model:   {self.target.model}")
-        print(f"   Seeds:   {len(self.seeds)}")
-        print(f"   Judge:   Local Ollama")
-        print(f"   Critic:  Local Ollama")
+        print(f"\n\U0001f525 BANE starting \u2014 {n_iterations} iterations")
+        print(f"   Target:    {self.target.description}")
+        print(f"   Model:     {self.target.model}")
+        print(f"   Seeds:     {len(self.seeds)}")
+        print(f"   Judge:     Rule-based (39 indicators)")
+        print(f"   Mutator:   Groq (with stealth self-rating)")
         print(f"   Selection: Thompson Sampling (10 clusters)")
         print(f"   {'='*50}\n")
 
         for i in range(n_iterations):
             if not self.running:
-                print("\n⏹ Stopped.")
+                print("\n\u23f9 Stopped.")
                 break
             try:
-                # Reduced sleep: only 1 Groq call now (mutator), rest is local
                 if i > 0:
                     await asyncio.sleep(3)
                 result = await self.run_iteration()
                 results.append(result)
 
-                emoji     = "✅" if result["success"] else "❌"
-                bar_fill  = "█" * int(result["score"] * 10)
-                bar_empty = "░" * (10 - int(result["score"] * 10))
+                emoji     = "\u2705" if result["success"] else "\u274c"
+                bar_fill  = "\u2588" * int(result["score"] * 10)
+                bar_empty = "\u2591" * (10 - int(result["score"] * 10))
 
                 print(
                     f"[{result['iteration']:4d}] {emoji} "
@@ -200,19 +164,19 @@ class BaneCore:
                     f"gen={result['generation']} "
                     f"strategy={result['strategy']:20s} "
                     f"cluster={result['cluster']:12s} "
-                    f"stealth={result['critic_stealth']}"
+                    f"stealth={result['stealth_score']}"
                 )
                 print(f"       Attack: {result['attack_preview']}")
                 print(f"       Response: {result['response_preview']}")
 
                 if result["success"]:
-                    print(f"       🎯 BREAKTHROUGH!")
+                    print(f"       \U0001f3af BREAKTHROUGH!")
 
                 if callback:
                     callback(result)
 
             except Exception as e:
-                print(f"[{i+1:4d}] ⚠️  Error: {e}")
+                print(f"[{i+1:4d}] \u26a0\ufe0f  Error: {e}")
                 continue
 
         # Save Thompson params at end
@@ -220,15 +184,14 @@ class BaneCore:
 
         stats = self.log.get_stats()
         print(f"\n{'='*50}")
-        print(f"🔥 BANE complete — {stats['total_attacks']} attacks")
+        print(f"\U0001f525 BANE complete \u2014 {stats['total_attacks']} attacks")
         print(f"   Success rate:  {stats['success_rate']:.1%}")
         print(f"   Avg score:     {stats['avg_score']:.3f}")
         print(f"   Max generation: {stats['max_generation']}")
         print(f"   Breakthroughs: {stats['successful_attacks']}")
-        print(f"   {self.critic.get_stats_summary()}")
 
         # Print Thompson cluster rankings
-        print(f"\n   📊 Cluster Rankings (Thompson α/β):")
+        print(f"\n   \U0001f4ca Cluster Rankings (Thompson \u03b1/\u03b2):")
         ranked = sorted(
             self.mutator.cluster_params.items(),
             key=lambda x: x[1]["alpha"] / (x[1]["alpha"] + x[1]["beta"]),
@@ -236,7 +199,7 @@ class BaneCore:
         )
         for name, p in ranked:
             ratio = p["alpha"] / (p["alpha"] + p["beta"])
-            print(f"      {name:20s} α={p['alpha']:.1f} β={p['beta']:.1f} win_rate={ratio:.3f}")
+            print(f"      {name:20s} \u03b1={p['alpha']:.1f} \u03b2={p['beta']:.1f} win_rate={ratio:.3f}")
 
         return results
 

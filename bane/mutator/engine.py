@@ -19,15 +19,11 @@ class MutatorEngine:
 
     def select_strategy(self, attack_log) -> MutationType:
         """Thompson Sampling over clusters, then random strategy in cluster."""
-        # Sample from Beta(alpha, beta) for each cluster
         samples = {}
         for cluster, params in self.cluster_params.items():
             samples[cluster] = random.betavariate(params["alpha"], params["beta"])
 
-        # Pick cluster with highest sample
         best_cluster = max(samples, key=samples.get)
-
-        # Random strategy within cluster
         strategies_in_cluster = STRATEGY_CLUSTERS[best_cluster]
         chosen = random.choice(strategies_in_cluster)
         return MutationType(chosen)
@@ -77,7 +73,7 @@ class MutatorEngine:
 
     async def mutate(self, parent, strategy, recent_successes,
                      recent_failures, target_info,
-                     recent_insights=None, seed_library=None) -> dict:
+                     seed_library=None) -> dict:
         # Find seed examples matching the strategy
         strategy_examples = []
         if seed_library:
@@ -92,7 +88,6 @@ class MutatorEngine:
             recent_successes=recent_successes,
             recent_failures=recent_failures,
             target_info=target_info,
-            recent_insights=recent_insights,
             strategy_examples=strategy_examples,
         )
         raw = await self.groq.chat(
@@ -105,6 +100,38 @@ class MutatorEngine:
 
         return self._parse_response(raw, parent, strategy)
 
+    @staticmethod
+    def _is_garbage(text: str) -> bool:
+        """Check if text is garbage (planning notes, strategy names, arrows)."""
+        if not text or len(text.strip()) < 20:
+            return True
+        if "\u2192" in text or "->" in text or "=>" in text:
+            return True
+        words = text.strip().split()
+        if len(words) < 5:
+            return True
+        # Single snake_case token (strategy name, not an attack)
+        if len(words) == 1 and "_" in words[0]:
+            return True
+        return False
+
+    @staticmethod
+    def _is_garbage_sequence(sequence: list) -> bool:
+        """Check if attack_sequence entries are garbage."""
+        if not sequence:
+            return False  # empty = single-turn, fine
+        for entry in sequence:
+            if not isinstance(entry, str):
+                return True
+            stripped = entry.strip()
+            if len(stripped) < 20 or len(stripped.split()) < 5:
+                return True
+            if "\u2192" in entry or "->" in entry or "=>" in entry:
+                return True
+            if "_" in entry and " " not in stripped:
+                return True
+        return False
+
     def _parse_response(self, raw: str, parent: dict, strategy: MutationType) -> dict:
         try:
             s, e = raw.find("{"), raw.rfind("}") + 1
@@ -113,9 +140,21 @@ class MutatorEngine:
             else:
                 raise ValueError("No JSON found")
 
+            text = parsed.get("attack_text", "")
+            sequence = parsed.get("attack_sequence", [])
+
+            # Validate attack_text — fall back to parent if garbage
+            if self._is_garbage(text):
+                text = parent.get("text", "")
+
+            # Validate sequence — clear if garbage
+            if self._is_garbage_sequence(sequence):
+                sequence = []
+
             return {
-                "text": parsed.get("attack_text", ""),
-                "sequence": parsed.get("attack_sequence", []),
+                "text": text,
+                "sequence": sequence,
+                "stealth_score": parsed.get("stealth_score", 5),
                 "reasoning": parsed.get("reasoning", ""),
                 "category": parsed.get("category", parent.get("category")),
                 "mutation_type": strategy.value,
@@ -123,10 +162,16 @@ class MutatorEngine:
                 "generation": parent.get("generation", 0) + 1,
             }
         except (json.JSONDecodeError, ValueError):
+            # Fallback: use raw text if it's not garbage, otherwise parent text
+            fallback_text = raw.strip()
+            if self._is_garbage(fallback_text):
+                fallback_text = parent.get("text", "")
+
             return {
-                "text": raw.strip(),
+                "text": fallback_text,
                 "sequence": [],
-                "reasoning": "Failed to parse JSON, using raw output",
+                "stealth_score": 0,
+                "reasoning": "Failed to parse JSON, using fallback",
                 "category": parent.get("category", "unknown"),
                 "mutation_type": strategy.value,
                 "parent_id": parent.get("id"),

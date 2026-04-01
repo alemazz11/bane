@@ -37,9 +37,20 @@ class AttackExecutor:
         start = time.time()
 
         sequence = attack.get("sequence", [])
+
+        # Validate sequence entries before multi-turn (defense-in-depth)
         if sequence and len(sequence) > 1:
-            response = await self.target.send_multi_turn(sequence)
-            attack_text = " → ".join(sequence)
+            valid = all(
+                isinstance(s, str) and len(s.strip()) >= 20 and len(s.strip().split()) >= 5
+                for s in sequence
+            )
+            if valid:
+                response = await self.target.send_multi_turn(sequence)
+                attack_text = " \u2192 ".join(sequence)
+            else:
+                # Garbage sequence — fall back to single-turn
+                attack_text = attack.get("text", "")
+                response = await self.target.send(attack_text)
         else:
             attack_text = attack.get("text", "")
             response = await self.target.send(attack_text)

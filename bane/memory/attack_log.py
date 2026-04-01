@@ -152,13 +152,13 @@ class AttackLog:
 
         for ins in raw:
             p = ins.get("pattern", "")
-            if p:
+            if p and isinstance(p, str):
                 pattern_counts[p] = pattern_counts.get(p, 0) + 1
             t = ins.get("key_technique", "")
-            if t and t != "unknown":
+            if t and isinstance(t, str) and t != "unknown":
                 technique_counts[t] = technique_counts.get(t, 0) + 1
             s = ins.get("suggested_next_mutation", "")
-            if s:
+            if s and isinstance(s, str):
                 suggestion_counts[s] = suggestion_counts.get(s, 0) + 1
 
         total = len(raw)
